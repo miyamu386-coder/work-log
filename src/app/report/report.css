@@ -1,0 +1,103 @@
+.report {
+  padding: 16px;
+  max-width: 720px;
+  margin: 0 auto;
+  font-family: system-ui, -apple-system, "Hiragino Sans", sans-serif;
+}
+
+.toolbar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.btn {
+  border: 1px solid rgba(0, 0, 0, 0.2);
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: white;
+  text-decoration: none;
+  color: inherit;
+}
+
+.btn.primary {
+  font-weight: 700;
+}
+
+.monthForm {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.monthInput {
+  padding: 6px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+.header h1 {
+  margin: 8px 0 10px;
+  font-size: 22px;
+}
+
+.meta {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  opacity: 0.9;
+}
+
+.tableWrap {
+  margin-top: 14px;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th,
+.table td {
+  border: 1px solid rgba(0, 0, 0, 0.15);
+  padding: 10px;
+}
+
+.table thead th {
+  background: rgba(0, 0, 0, 0.04);
+}
+
+.footer {
+  margin-top: 18px;
+  opacity: 0.7;
+  font-size: 12px;
+}
+
+/* 印刷最適化 */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+
+  .report {
+    max-width: none;
+    padding: 0;
+  }
+
+  @page {
+    margin: 12mm;
+  }
+
+  .table th,
+  .table td {
+    padding: 6px;
+  }
+}
