@@ -9,13 +9,45 @@ type Log = {
   hours: number;
 };
 
-const STORAGE_KEY = "miyamu_time_logs_v1";
+const STORAGE_KEY_BASE = "miyamu_time_logs_v1";
+
+/** localStorage のキーから「YYYY-MM」を取り出す */
+function extractYmFromKey(key: string): string | null {
+  // 例: miyamu_time_logs_v1_2026-02
+  const prefix = `${STORAGE_KEY_BASE}_`;
+  if (!key.startsWith(prefix)) return null;
+  const ym = key.slice(prefix.length);
+  return /^\d{4}-\d{2}$/.test(ym) ? ym : null;
+}
+
+/** みやむLogに存在する月一覧を取得（降順） */
+function getAvailableMonths(): string[] {
+  const months: string[] = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (!k) continue;
+    const ym = extractYmFromKey(k);
+    if (ym) months.push(ym);
+  }
+  // 新しい月が上
+  months.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0));
+  return months;
+}
+
+function monthLabel(ym: string): string {
+  const [y, m] = ym.split("-");
+  return `${y}年${Number(m)}月`;
+}
+
+function getStorageKey(ym: string): string {
+  return `${STORAGE_KEY_BASE}_${ym}`;
+}
 
 /** 合計時間からモフ画像（151以上で白目） */
 function getMofuImage(total: number) {
-  if (total <= 50) return "/mofu-add.jpg";        // ノーマル（0–50）
-  if (total <= 100) return "/mofu-sweat.png";     // 汗（51–100）
-  if (total <= 150) return "/mofu-pale.png";      // 青ざめ（101–150）
+  if (total <= 50) return "/mofu-add.jpg";        // ノーマル
+  if (total <= 100) return "/mofu-sweat.png";     // 汗
+  if (total <= 150) return "/mofu-pale.png";      // 青ざめ
   return "/mofu-exhausted.png";                   // 白目（151以上）
 }
 
@@ -37,29 +69,50 @@ function getShakeLevel(total: number): 0 | 1 | 2 {
 export default function ReportPage() {
   const router = useRouter();
 
+  const [months, setMonths] = useState<string[]>([]);
+  const [selectedYm, setSelectedYm] = useState<string>(""); // "2026-02"
   const [logs, setLogs] = useState<Log[]>([]);
-  const [month, setMonth] = useState("2026-01");
 
-  // localStorage 読み込み
+  // 初回：月一覧読み込み & 初期月を決める
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return;
-      setLogs(parsed as Log[]);
-    } catch {
-      // 無視
-    }
+    const ms = getAvailableMonths();
+    setMonths(ms);
+
+    // まずは「最新月」を表示（なければ今月）
+    const now = new Date();
+    const currentYm = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+    const initial = ms[0] ?? currentYm;
+    setSelectedYm(initial);
   }, []);
 
-  const monthLogs = useMemo(
-    () =>
-      logs
-        .filter((l) => l && typeof l.date === "string" && l.date.startsWith(month))
-        .sort((a, b) => (a.date < b.date ? -1 : 1)),
-    [logs, month]
-  );
+  // 選んだ月のデータを読む
+  useEffect(() => {
+    if (!selectedYm) return;
+
+    try {
+      const key = getStorageKey(selectedYm);
+      const raw = localStorage.getItem(key);
+      if (!raw) {
+        setLogs([]);
+        return;
+      }
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) {
+        setLogs([]);
+        return;
+      }
+      setLogs(parsed as Log[]);
+    } catch {
+      setLogs([]);
+    }
+  }, [selectedYm]);
+
+  const monthLogs = useMemo(() => {
+    // 念のため date の月でもフィルタ（キーは月別だが保険）
+    return logs
+      .filter((l) => l && typeof l.date === "string" && l.date.startsWith(selectedYm))
+      .sort((a, b) => (a.date < b.date ? -1 : 1));
+  }, [logs, selectedYm]);
 
   const total = useMemo(
     () => monthLogs.reduce((sum, l) => sum + (Number.isFinite(l.hours) ? l.hours : 0), 0),
@@ -84,14 +137,8 @@ export default function ReportPage() {
   };
 
   return (
-    <main
-      style={{
-        minHeight: "100vh",
-        padding: 24,
-        background: "#f5f6f7",
-      }}
-    >
-      {/* 震えアニメ */}
+    <main style={{ minHeight: "100vh", padding: 24, background: "#f5f6f7" }}>
+      {/* 震えアニメ + 印刷で操作バー隠す */}
       <style jsx global>{`
         @keyframes mofu-shake {
           0% { transform: translate(0, 0) rotate(0deg); }
@@ -128,12 +175,37 @@ export default function ReportPage() {
           ← 記録ページへ戻る
         </button>
 
-        <input
-          type="month"
-          value={month}
-          onChange={(e) => setMonth(e.target.value)}
-          style={{ padding: "6px 10px", borderRadius: 8, border: "1px solid #ccc" }}
-        />
+        {/* 月選択：保存済み月があれば一覧、なければ入力可 */}
+        {months.length > 0 ? (
+          <select
+            value={selectedYm}
+            onChange={(e) => setSelectedYm(e.target.value)}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid #ccc",
+              background: "#fff",
+            }}
+          >
+            {months.map((ym) => (
+              <option key={ym} value={ym}>
+                {monthLabel(ym)}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type="month"
+            value={selectedYm}
+            onChange={(e) => setSelectedYm(e.target.value)}
+            style={{
+              padding: "6px 10px",
+              borderRadius: 8,
+              border: "1px solid #ccc",
+              background: "#fff",
+            }}
+          />
+        )}
 
         <button
           onClick={() => window.print()}
@@ -163,11 +235,12 @@ export default function ReportPage() {
         <h1 style={{ marginTop: 0 }}>みやむLog 月次レポート</h1>
 
         <div style={{ marginTop: 6, color: "#555", fontSize: 18 }}>
-          対象：{month.replace("-", "年")}月　
+          対象：{selectedYm ? monthLabel(selectedYm) : "-"}　
           日数：{days}日　
           合計：<b>{total.toFixed(1)}</b>時間
         </div>
 
+        {/* モフ */}
         <div style={{ marginTop: 18, textAlign: "center" }}>
           <img src={getMofuImage(total)} alt="モフ" style={mofuStyle} />
           <div style={{ marginTop: 10, fontSize: 18, fontWeight: 800 }}>
@@ -178,13 +251,8 @@ export default function ReportPage() {
           </div>
         </div>
 
-        <table
-          style={{
-            width: "100%",
-            marginTop: 24,
-            borderCollapse: "collapse",
-          }}
-        >
+        {/* テーブル */}
+        <table style={{ width: "100%", marginTop: 24, borderCollapse: "collapse" }}>
           <thead>
             <tr>
               <th style={th}>日付</th>

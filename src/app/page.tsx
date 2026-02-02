@@ -9,20 +9,25 @@ type Log = {
   hours: number;
 };
 
-const STORAGE_KEY = "miyamu_time_logs_v1";
+const STORAGE_KEY_BASE = "miyamu_time_logs_v1";
 
-/** 入力：YYYY/MM/DD or YYYY-MM-DD or YYYY.MM.DD → ISO(YYYYYYY-MM-DD) */
-function toISODate(input: string): string {
-  const s = input.trim().replace(/\./g, "/").replace(/-/g, "/");
-  const m = s.match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
-  if (!m) return "";
-  const y = Number(m[1]);
-  const mo = Number(m[2]);
-  const d = Number(m[3]);
-  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return "";
-  if (mo < 1 || mo > 12) return "";
-  if (d < 1 || d > 31) return "";
-  return `${y}-${String(mo).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+/** YYYY-MM-DD から YYYY-MM を作る */
+function ymFromISO(dateISO: string): string {
+  return dateISO.slice(0, 7);
+}
+
+/** 今日の YYYY-MM-DD */
+function todayISO(): string {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function monthLabel(ym: string): string {
+  const [y, m] = ym.split("-");
+  return `${y}年${Number(m)}月`;
 }
 
 function toSlashDate(iso: string): string {
@@ -56,17 +61,23 @@ function uid(): string {
 }
 
 export default function Page() {
-  const [dateInput, setDateInput] = useState<string>("2026/01/01");
+  // 日付は自由に選択（過去月OK）
+  const [dateISO, setDateISO] = useState<string>(todayISO());
+
+  const ym = useMemo(() => ymFromISO(dateISO), [dateISO]);
+  const storageKey = useMemo(() => `${STORAGE_KEY_BASE}_${ym}`, [ym]);
+
   const [hoursInput, setHoursInput] = useState<string>("");
 
+  // その月のログだけを state として持つ（=月を跨ぐと入れ替わる）
   const [logs, setLogs] = useState<Log[]>([]);
 
   // 編集
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editHoursInput, setEditHoursInput] = useState<string>("");
 
-  // 初回ロード完了フラグ（データ消え対策）
-  const hasLoadedRef = useRef(false);
+  // 初回ロード完了フラグ（キーごとに管理）
+  const hasLoadedForKeyRef = useRef<string | null>(null);
 
   // 瞬き
   const [isBlink, setIsBlink] = useState(false);
@@ -79,32 +90,45 @@ export default function Page() {
   const hoursRef = useRef<HTMLInputElement | null>(null);
   const [isMofuHover, setIsMofuHover] = useState(false);
 
-  /* 初回ロード：localStorage */
+  /* 月キーが変わったら、その月のデータを読み込む */
   useEffect(() => {
+    // キーが変わるたびロード扱いにする
+    hasLoadedForKeyRef.current = null;
+    setEditingId(null);
+    setEditHoursInput("");
+
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
+      const raw = localStorage.getItem(storageKey);
+      if (!raw) {
+        setLogs([]);
+        hasLoadedForKeyRef.current = storageKey;
+        return;
+      }
       const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed)) return;
+      if (!Array.isArray(parsed)) {
+        setLogs([]);
+        hasLoadedForKeyRef.current = storageKey;
+        return;
+      }
       setLogs(parsed as Log[]);
     } catch {
-      // ignore
+      setLogs([]);
     } finally {
-      hasLoadedRef.current = true;
+      hasLoadedForKeyRef.current = storageKey;
     }
-  }, []);
+  }, [storageKey]);
 
-  /* 保存：localStorage（初回ロード前は保存しない） */
+  /* 保存：現在の月キーに保存（ロード完了後のみ） */
   useEffect(() => {
-    if (!hasLoadedRef.current) return;
+    if (hasLoadedForKeyRef.current !== storageKey) return;
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(logs));
+      localStorage.setItem(storageKey, JSON.stringify(logs));
     } catch {
       // ignore
     }
-  }, [logs]);
+  }, [logs, storageKey]);
 
-  /* 合計 */
+  /* 合計（選択中の月だけ） */
   const total = useMemo(() => logs.reduce((sum, l) => sum + l.hours, 0), [logs]);
 
   /* 入力中プレビュー */
@@ -116,12 +140,11 @@ export default function Page() {
 
   /* 追加できるか */
   const canAdd = useMemo(() => {
-    const iso = toISODate(dateInput);
     const h = parseHours(hoursInput);
-    return !!iso && Number.isFinite(h) && h > 0;
-  }, [dateInput, hoursInput]);
+    return !!dateISO && Number.isFinite(h) && h > 0;
+  }, [hoursInput, dateISO]);
 
-  /* 瞬きタイマー（常時） */
+  /* 瞬きタイマー */
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -149,13 +172,11 @@ export default function Page() {
 
   /* 追加 */
   const addLog = () => {
-    const iso = toISODate(dateInput);
     const h = parseHours(hoursInput);
-
-    if (!iso) return;
     if (!Number.isFinite(h) || h <= 0) return;
 
-    const next: Log = { id: uid(), date: iso, hours: h };
+    // dateISO の月に保存される（storageKeyがym由来なので）
+    const next: Log = { id: uid(), date: dateISO, hours: h };
 
     setLogs((prev) => {
       const merged = [next, ...prev];
@@ -166,7 +187,6 @@ export default function Page() {
     setHoursInput("");
     requestAnimationFrame(() => hoursRef.current?.focus());
 
-    // 追加完了！だけ表示
     setJustAdded(true);
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setJustAdded(false), 1800);
@@ -199,7 +219,7 @@ export default function Page() {
     if (editingId === id) cancelEdit();
   };
 
-  /* 全消去 */
+  /* この月を全消去 */
   const clearAll = () => {
     setLogs([]);
     cancelEdit();
@@ -260,20 +280,25 @@ export default function Page() {
           </Link>
         </div>
 
-        <div style={{ marginTop: 14, textAlign: "center", fontSize: 20 }}>
+        <div style={{ marginTop: 10, textAlign: "center", color: "#666", fontSize: 14 }}>
+          対象月：{monthLabel(ym)}（この月に保存されます）
+        </div>
+
+        <div style={{ marginTop: 8, textAlign: "center", fontSize: 20 }}>
           <span style={{ color: "#666" }}>合計：</span>
           <b>{total.toFixed(1)}</b>
           <span style={{ marginLeft: 6 }}>時間</span>
         </div>
 
-        <label style={{ display: "block", fontSize: 16, marginTop: 24, marginBottom: 10 }}>
+        {/* ✅ 日付選択（過去月OK / 選んだ月に保存先が切り替わる） */}
+        <label style={{ display: "block", fontSize: 16, marginTop: 18, marginBottom: 10 }}>
           日付
         </label>
+
         <input
-          value={dateInput}
-          onChange={(e) => setDateInput(e.target.value)}
-          placeholder="例：2026/01/01"
-          inputMode="numeric"
+          type="date"
+          value={dateISO}
+          onChange={(e) => setDateISO(e.target.value)}
           style={{
             width: "100%",
             padding: "14px 16px",
@@ -340,7 +365,6 @@ export default function Page() {
                 }}
               />
 
-              {/* ✅ 追加完了！だけ表示 */}
               {justAdded && (
                 <div
                   style={{
@@ -367,12 +391,12 @@ export default function Page() {
         </div>
 
         <div style={{ marginTop: 10, color: "#888", fontSize: 14 }}>
-          ※保存はローカルストレージ（同じ端末・同じブラウザで保持）
+          ※保存はローカルストレージ（月ごとに自動で分かれます）
         </div>
 
-        {/* ✅ 記録一覧（修正・削除） */}
+        {/* ✅ 記録一覧（修正・消去） */}
         <div style={{ marginTop: 28, fontSize: 18, fontWeight: 800 }}>
-          記録一覧
+          記録一覧（{monthLabel(ym)}）
         </div>
 
         <div style={{ marginTop: 12, display: "grid", gap: 12 }}>
@@ -514,7 +538,7 @@ export default function Page() {
             fontWeight: 800,
           }}
         >
-          全部消去
+          この月の記録を全部消去
         </button>
       </div>
     </main>
